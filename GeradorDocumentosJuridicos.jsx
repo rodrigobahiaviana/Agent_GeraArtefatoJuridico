@@ -11,23 +11,26 @@ const TIPOS_DOCUMENTO = [
 const LIMITE_REGISTROS = 10;
 const BACKEND_URL = "http://localhost:3001";
 
-// Paleta inspirada em plataformas de pesquisa jurídica: navy escuro,
-// dourado como destaque, tipografia serifada nos títulos.
+// Dark mode — texto em branco/azul, destaques e botões em amarelo.
 const cores = {
-  navyEscuro: "#0b1f3a",
-  navyMedio: "#12294d",
-  dourado: "#b8902e",
-  douradoClaro: "#d4af5a",
-  fundo: "#f5f6f8",
-  cardBorda: "#e1e4ea",
-  texto: "#1c2733",
-  textoClaro: "#5b6778",
-  sucesso: "#166534",
-  sucessoFundo: "#f0fdf4",
-  sucessoBorda: "#bbf7d0",
-  erro: "#b91c1c",
-  erroFundo: "#fef2f2",
-  erroBorda: "#fecaca",
+  fundo: "#0a0e1a",
+  fundoCard: "#121a2e",
+  fundoInput: "#0d1420",
+  borda: "#2a3554",
+  bordaForte: "#3d4a70",
+  azul: "#5b9dff",
+  azulClaro: "#8fb8ff",
+  branco: "#f5f7fb",
+  brancoSuave: "#aab4cc",
+  amarelo: "#f2c94c",
+  amareloClaro: "#f7db7e",
+  textoBotao: "#0a0e1a",
+  sucesso: "#4ade80",
+  sucessoFundo: "rgba(74, 222, 128, 0.10)",
+  sucessoBorda: "rgba(74, 222, 128, 0.35)",
+  erro: "#f87171",
+  erroFundo: "rgba(248, 113, 113, 0.10)",
+  erroBorda: "rgba(248, 113, 113, 0.35)",
 };
 
 const fontesImport =
@@ -129,11 +132,11 @@ function Cartao({ children, style }) {
   return (
     <div
       style={{
-        background: "#fff",
-        border: `1px solid ${cores.cardBorda}`,
+        background: cores.fundoCard,
+        border: `1px solid ${cores.borda}`,
         borderRadius: 6,
         padding: 24,
-        boxShadow: "0 1px 3px rgba(11,31,58,0.06)",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.4)",
         ...style,
       }}
     >
@@ -149,8 +152,8 @@ function TituloSecao({ children }) {
         fontFamily: "'Playfair Display', Georgia, serif",
         fontSize: 20,
         fontWeight: 700,
-        color: cores.navyEscuro,
-        borderBottom: `2px solid ${cores.dourado}`,
+        color: cores.azul,
+        borderBottom: `2px solid ${cores.amarelo}`,
         paddingBottom: 8,
         marginTop: 0,
         marginBottom: 20,
@@ -166,12 +169,12 @@ function BotaoPrimario({ children, style, ...props }) {
     <button
       {...props}
       style={{
-        background: cores.navyEscuro,
-        color: "#fff",
+        background: cores.amarelo,
+        color: cores.textoBotao,
         border: "none",
         borderRadius: 4,
         padding: "10px 22px",
-        fontWeight: 600,
+        fontWeight: 700,
         fontSize: 14,
         cursor: props.disabled ? "not-allowed" : "pointer",
         opacity: props.disabled ? 0.5 : 1,
@@ -189,14 +192,15 @@ function BotaoSecundario({ children, style, ...props }) {
     <button
       {...props}
       style={{
-        background: "#fff",
-        color: cores.navyEscuro,
-        border: `1px solid ${cores.navyEscuro}`,
+        background: "transparent",
+        color: cores.amarelo,
+        border: `1px solid ${cores.amarelo}`,
         borderRadius: 4,
         padding: "8px 16px",
         fontWeight: 600,
         fontSize: 13,
-        cursor: "pointer",
+        cursor: props.disabled ? "not-allowed" : "pointer",
+        opacity: props.disabled ? 0.5 : 1,
         ...style,
       }}
     >
@@ -222,6 +226,50 @@ export default function GeradorDocumentosJuridicos() {
   const [logTotal, setLogTotal] = useState(null);
   const [consultandoLog, setConsultandoLog] = useState(false);
   const [erroConsulta, setErroConsulta] = useState(null);
+
+  // Documentos gerados localmente
+  const [documentos, setDocumentos] = useState([]);
+  const [documentosTotal, setDocumentosTotal] = useState(null);
+  const [carregandoDocumentos, setCarregandoDocumentos] = useState(false);
+  const [erroDocumentos, setErroDocumentos] = useState(null);
+
+  async function handleListarDocumentos() {
+    setCarregandoDocumentos(true);
+    setErroDocumentos(null);
+    try {
+      const resp = await fetch(`${BACKEND_URL}/api/documentos`);
+      const dados = await resp.json();
+      if (!resp.ok) {
+        setErroDocumentos(dados.detail || "Falha ao listar documentos.");
+      } else {
+        setDocumentos(dados.documentos);
+        setDocumentosTotal(dados.total);
+      }
+    } catch {
+      setErroDocumentos("Não foi possível conectar ao backend.");
+    } finally {
+      setCarregandoDocumentos(false);
+    }
+  }
+
+  async function handleBaixarDocumentoSalvo(caminho, nomeArquivo) {
+    try {
+      const resp = await fetch(`${BACKEND_URL}/api/documentos/conteudo?caminho=${encodeURIComponent(caminho)}`);
+      const dados = await resp.json();
+      if (resp.ok) baixarTexto(dados.conteudo, nomeArquivo);
+    } catch {
+      // usuário pode tentar de novo — sem estado de erro dedicado aqui
+    }
+  }
+
+  function formatarTamanho(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+
+  function formatarData(iso) {
+    return new Date(iso).toLocaleString("pt-BR");
+  }
 
   function handleArquivoSelecionado(e) {
     const arquivo = e.target.files[0];
@@ -290,6 +338,8 @@ export default function GeradorDocumentosJuridicos() {
     setResultados(novosResultados);
     setProgresso(null);
     setGerando(false);
+
+    if (novosResultados.some((r) => r.ok)) handleListarDocumentos();
   }
 
   async function handleConsultarLog(todos) {
@@ -318,23 +368,42 @@ export default function GeradorDocumentosJuridicos() {
 
   const podeGerar = registros.length > 0 && errosArquivo.length === 0 && !gerando;
 
+  const estiloCampo = {
+    display: "block",
+    width: "100%",
+    marginTop: 6,
+    padding: 10,
+    background: cores.fundoInput,
+    color: cores.branco,
+    border: `1px solid ${cores.borda}`,
+    borderRadius: 4,
+    fontSize: 14,
+  };
+
   return (
-    <div style={{ background: cores.fundo, minHeight: "100vh", fontFamily: "'Inter', sans-serif" }}>
+    <div
+      style={{
+        background: cores.fundo,
+        minHeight: "100vh",
+        fontFamily: "'Inter', sans-serif",
+        colorScheme: "dark",
+      }}
+    >
       <style>{fontesImport}</style>
 
       {/* Cabeçalho estilo plataforma de pesquisa jurídica */}
       <header
         style={{
-          background: `linear-gradient(90deg, ${cores.navyEscuro} 0%, ${cores.navyMedio} 100%)`,
+          background: `linear-gradient(90deg, ${cores.fundo} 0%, ${cores.fundoCard} 100%)`,
           padding: "20px 32px",
-          borderBottom: `3px solid ${cores.dourado}`,
+          borderBottom: `3px solid ${cores.amarelo}`,
         }}
       >
         <div style={{ maxWidth: 900, margin: "0 auto" }}>
           <h1
             style={{
               fontFamily: "'Playfair Display', Georgia, serif",
-              color: "#fff",
+              color: cores.branco,
               fontSize: 26,
               fontWeight: 700,
               margin: 0,
@@ -343,7 +412,7 @@ export default function GeradorDocumentosJuridicos() {
           >
             Gerador de Documentos Jurídicos
           </h1>
-          <p style={{ color: cores.douradoClaro, fontSize: 13, margin: "4px 0 0", letterSpacing: 0.5 }}>
+          <p style={{ color: cores.amareloClaro, fontSize: 13, margin: "4px 0 0", letterSpacing: 0.5 }}>
             MINUTAS AUTOMATIZADAS · REVISÃO EM DUAS ETAPAS · RASTREABILIDADE COMPLETA
           </p>
         </div>
@@ -354,20 +423,12 @@ export default function GeradorDocumentosJuridicos() {
         <Cartao>
           <TituloSecao>Gerar Documentos</TituloSecao>
 
-          <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: cores.texto }}>
+          <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: cores.azulClaro }}>
             Tipo de documento
             <select
               value={tipoDocumento}
               onChange={(e) => setTipoDocumento(e.target.value)}
-              style={{
-                display: "block",
-                width: "100%",
-                marginTop: 6,
-                padding: 10,
-                border: `1px solid ${cores.cardBorda}`,
-                borderRadius: 4,
-                fontSize: 14,
-              }}
+              style={estiloCampo}
             >
               {TIPOS_DOCUMENTO.map((t) => (
                 <option key={t.id} value={t.id}>
@@ -394,13 +455,13 @@ export default function GeradorDocumentosJuridicos() {
             </BotaoSecundario>
           </div>
 
-          <label style={{ display: "block", marginTop: 20, fontSize: 13, fontWeight: 600, color: cores.texto }}>
+          <label style={{ display: "block", marginTop: 20, fontSize: 13, fontWeight: 600, color: cores.azulClaro }}>
             Arquivo com os registros (.csv ou .md — até {LIMITE_REGISTROS} registros)
             <input
               type="file"
               accept=".csv,.md"
               onChange={handleArquivoSelecionado}
-              style={{ display: "block", marginTop: 8, fontSize: 13 }}
+              style={{ display: "block", marginTop: 8, fontSize: 13, color: cores.brancoSuave }}
             />
           </label>
 
@@ -427,10 +488,10 @@ export default function GeradorDocumentosJuridicos() {
             <div style={{ marginTop: 16, overflowX: "auto" }}>
               <table style={{ borderCollapse: "collapse", fontSize: 12.5, width: "100%" }}>
                 <thead>
-                  <tr style={{ background: cores.fundo }}>
-                    <th style={{ border: `1px solid ${cores.cardBorda}`, padding: 6, textAlign: "left" }}>#</th>
+                  <tr style={{ background: cores.fundoInput }}>
+                    <th style={{ border: `1px solid ${cores.borda}`, padding: 6, textAlign: "left", color: cores.azulClaro }}>#</th>
                     {Object.keys(registros[0]).map((chave) => (
-                      <th key={chave} style={{ border: `1px solid ${cores.cardBorda}`, padding: 6, textAlign: "left" }}>
+                      <th key={chave} style={{ border: `1px solid ${cores.borda}`, padding: 6, textAlign: "left", color: cores.azulClaro }}>
                         {chave}
                       </th>
                     ))}
@@ -439,9 +500,9 @@ export default function GeradorDocumentosJuridicos() {
                 <tbody>
                   {registros.map((registro, i) => (
                     <tr key={i}>
-                      <td style={{ border: `1px solid ${cores.cardBorda}`, padding: 6 }}>{i + 1}</td>
+                      <td style={{ border: `1px solid ${cores.borda}`, padding: 6, color: cores.brancoSuave }}>{i + 1}</td>
                       {Object.keys(registros[0]).map((chave) => (
-                        <td key={chave} style={{ border: `1px solid ${cores.cardBorda}`, padding: 6 }}>
+                        <td key={chave} style={{ border: `1px solid ${cores.borda}`, padding: 6, color: cores.branco }}>
                           {registro[chave]}
                         </td>
                       ))}
@@ -460,14 +521,14 @@ export default function GeradorDocumentosJuridicos() {
 
           {progresso && (
             <div style={{ marginTop: 18 }}>
-              <p style={{ fontSize: 13, marginBottom: 6, color: cores.textoClaro }}>
+              <p style={{ fontSize: 13, marginBottom: 6, color: cores.brancoSuave }}>
                 Gerando contrato {progresso.atual} de {progresso.total}...
               </p>
-              <div style={{ background: cores.cardBorda, borderRadius: 8, height: 8, overflow: "hidden" }}>
+              <div style={{ background: cores.fundoInput, borderRadius: 8, height: 8, overflow: "hidden", border: `1px solid ${cores.borda}` }}>
                 <div
                   style={{
                     width: `${(progresso.atual / progresso.total) * 100}%`,
-                    background: cores.dourado,
+                    background: cores.amarelo,
                     height: "100%",
                     transition: "width 0.3s",
                   }}
@@ -478,7 +539,7 @@ export default function GeradorDocumentosJuridicos() {
 
           {resultados.length > 0 && (
             <div style={{ marginTop: 24 }}>
-              <h3 style={{ fontSize: 15, fontWeight: 700, color: cores.navyEscuro }}>
+              <h3 style={{ fontSize: 15, fontWeight: 700, color: cores.azul }}>
                 Resultado — {resultados.filter((r) => r.ok).length} de {resultados.length} gerado(s) com sucesso
               </h3>
 
@@ -493,12 +554,18 @@ export default function GeradorDocumentosJuridicos() {
                     border: `1px solid ${r.ok ? cores.sucessoBorda : cores.erroBorda}`,
                   }}
                 >
-                  <p style={{ fontWeight: 600, margin: 0, fontSize: 13 }}>
+                  <p style={{ fontWeight: 600, margin: 0, fontSize: 13, color: cores.branco }}>
                     Registro {r.indice} — {r.ok ? "gerado" : "falhou"}
                   </p>
 
                   {r.ok ? (
                     <>
+                      {r.dados.arquivoLocal && (
+                        <p style={{ margin: "6px 0 0", fontSize: 12.5, color: cores.brancoSuave }}>
+                          Salvo localmente em: <code style={{ color: cores.amareloClaro }}>{r.dados.arquivoLocal}</code>
+                        </p>
+                      )}
+
                       <BotaoSecundario
                         style={{ marginTop: 8 }}
                         onClick={() => baixarTexto(r.dados.documento, `${tipoDocumento}-registro-${r.indice}.md`)}
@@ -508,14 +575,14 @@ export default function GeradorDocumentosJuridicos() {
 
                       {r.dados.temasJuridicos?.length > 0 && (
                         <div style={{ marginTop: 10, fontSize: 12.5 }}>
-                          <p style={{ margin: "0 0 4px", fontWeight: 600, color: cores.texto }}>
+                          <p style={{ margin: "0 0 4px", fontWeight: 600, color: cores.azulClaro }}>
                             Temas jurídicos sinalizados (links de busca):
                           </p>
-                          <ul style={{ margin: 0, paddingLeft: 18 }}>
+                          <ul style={{ margin: 0, paddingLeft: 18, color: cores.brancoSuave }}>
                             {r.dados.temasJuridicos.map((t, i) => (
                               <li key={i}>
                                 {t.tema} —{" "}
-                                <a href={t.link_busca_jusbrasil} target="_blank" rel="noreferrer" style={{ color: cores.navyEscuro }}>
+                                <a href={t.link_busca_jusbrasil} target="_blank" rel="noreferrer" style={{ color: cores.amarelo }}>
                                   buscar no Jusbrasil
                                 </a>
                               </li>
@@ -525,9 +592,17 @@ export default function GeradorDocumentosJuridicos() {
                       )}
                     </>
                   ) : (
-                    <p style={{ color: cores.erro, fontSize: 13, marginTop: 4 }}>
-                      {r.dados.motivo || r.dados.erro || r.dados.detail || "Erro desconhecido."}
-                    </p>
+                    <>
+                      <p style={{ color: cores.erro, fontSize: 13, marginTop: 4 }}>
+                        {r.dados.motivo || r.dados.erro || r.dados.detail || "Erro desconhecido."}
+                      </p>
+                      {r.dados.arquivoLocal && (
+                        <p style={{ margin: "6px 0 0", fontSize: 12.5, color: cores.brancoSuave }}>
+                          Última minuta (não aprovada) salva em:{" "}
+                          <code style={{ color: cores.amareloClaro }}>{r.dados.arquivoLocal}</code>
+                        </p>
+                      )}
+                    </>
                   )}
                 </div>
               ))}
@@ -535,13 +610,73 @@ export default function GeradorDocumentosJuridicos() {
           )}
         </Cartao>
 
-        {/* Seção 2 — Consulta ao log de gerações */}
+        {/* Seção 2 — Documentos gerados localmente (arquivos .md em documentos_gerados/) */}
+        <Cartao>
+          <TituloSecao>Documentos Gerados</TituloSecao>
+
+          <p style={{ fontSize: 13, color: cores.brancoSuave, marginTop: -8, marginBottom: 16 }}>
+            Toda geração (aprovada ou não) grava um arquivo <code style={{ color: cores.amareloClaro }}>.md</code> em{" "}
+            <code style={{ color: cores.amareloClaro }}>documentos_gerados/&lt;tipo&gt;/</code> no servidor. Esta
+            lista é separada do log de auditoria abaixo — aqui é o arquivo em si.
+          </p>
+
+          <BotaoSecundario onClick={handleListarDocumentos} disabled={carregandoDocumentos}>
+            {carregandoDocumentos ? "Carregando..." : "Atualizar lista"}
+          </BotaoSecundario>
+
+          {erroDocumentos && (
+            <p style={{ marginTop: 12, fontSize: 13, color: cores.erro }}>{erroDocumentos}</p>
+          )}
+
+          {documentosTotal !== null && (
+            <p style={{ marginTop: 14, fontSize: 13, fontWeight: 600, color: cores.azulClaro }}>
+              {documentosTotal} arquivo(s) encontrado(s)
+            </p>
+          )}
+
+          {documentos.length > 0 && (
+            <div style={{ marginTop: 10, overflowX: "auto" }}>
+              <table style={{ borderCollapse: "collapse", fontSize: 12.5, width: "100%" }}>
+                <thead>
+                  <tr style={{ background: cores.fundoInput }}>
+                    <th style={{ border: `1px solid ${cores.borda}`, padding: 6, textAlign: "left", color: cores.azulClaro }}>Tipo</th>
+                    <th style={{ border: `1px solid ${cores.borda}`, padding: 6, textAlign: "left", color: cores.azulClaro }}>Arquivo</th>
+                    <th style={{ border: `1px solid ${cores.borda}`, padding: 6, textAlign: "left", color: cores.azulClaro }}>Modificado em</th>
+                    <th style={{ border: `1px solid ${cores.borda}`, padding: 6, textAlign: "left", color: cores.azulClaro }}>Tamanho</th>
+                    <th style={{ border: `1px solid ${cores.borda}`, padding: 6, textAlign: "left", color: cores.azulClaro }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {documentos.map((doc) => (
+                    <tr key={doc.caminho}>
+                      <td style={{ border: `1px solid ${cores.borda}`, padding: 6, color: cores.branco }}>{doc.tipoDocumento}</td>
+                      <td style={{ border: `1px solid ${cores.borda}`, padding: 6, color: cores.branco }}>{doc.nomeArquivo}</td>
+                      <td style={{ border: `1px solid ${cores.borda}`, padding: 6, color: cores.brancoSuave }}>{formatarData(doc.modificadoEm)}</td>
+                      <td style={{ border: `1px solid ${cores.borda}`, padding: 6, color: cores.brancoSuave }}>{formatarTamanho(doc.tamanhoBytes)}</td>
+                      <td style={{ border: `1px solid ${cores.borda}`, padding: 6 }}>
+                        <BotaoSecundario
+                          style={{ padding: "4px 10px", fontSize: 12 }}
+                          onClick={() => handleBaixarDocumentoSalvo(doc.caminho, doc.nomeArquivo)}
+                        >
+                          Baixar
+                        </BotaoSecundario>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Cartao>
+
+        {/* Seção 3 — Consulta ao log de gerações */}
         <Cartao>
           <TituloSecao>Consultar Log de Gerações</TituloSecao>
 
-          <p style={{ fontSize: 13, color: cores.textoClaro, marginTop: -8, marginBottom: 16 }}>
-            Cada geração (sucesso ou falha) fica registrada com identificador (CPF/CNPJ), status e
-            temas jurídicos sinalizados. Busque por identificador ou veja o histórico completo.
+          <p style={{ fontSize: 13, color: cores.brancoSuave, marginTop: -8, marginBottom: 16 }}>
+            Cada geração (sucesso ou falha) fica registrada com identificador (CPF/CNPJ), status,
+            arquivo local salvo e temas jurídicos sinalizados. Busque por identificador ou veja o
+            histórico completo.
           </p>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -553,7 +688,9 @@ export default function GeradorDocumentosJuridicos() {
               style={{
                 flex: "1 1 220px",
                 padding: 10,
-                border: `1px solid ${cores.cardBorda}`,
+                background: cores.fundoInput,
+                color: cores.branco,
+                border: `1px solid ${cores.borda}`,
                 borderRadius: 4,
                 fontSize: 14,
               }}
@@ -566,7 +703,7 @@ export default function GeradorDocumentosJuridicos() {
             </BotaoSecundario>
           </div>
 
-          {consultandoLog && <p style={{ marginTop: 12, fontSize: 13, color: cores.textoClaro }}>Consultando...</p>}
+          {consultandoLog && <p style={{ marginTop: 12, fontSize: 13, color: cores.brancoSuave }}>Consultando...</p>}
 
           {erroConsulta && (
             <p style={{ marginTop: 12, fontSize: 13, color: cores.erro }}>{erroConsulta}</p>
@@ -575,7 +712,7 @@ export default function GeradorDocumentosJuridicos() {
           {logMarkdown && (
             <div style={{ marginTop: 18 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                <p style={{ fontSize: 13, fontWeight: 600, color: cores.texto, margin: 0 }}>
+                <p style={{ fontSize: 13, fontWeight: 600, color: cores.azulClaro, margin: 0 }}>
                   {logTotal} registro(s) encontrado(s)
                 </p>
                 <BotaoSecundario
@@ -592,8 +729,9 @@ export default function GeradorDocumentosJuridicos() {
               <pre
                 style={{
                   whiteSpace: "pre-wrap",
-                  background: cores.fundo,
-                  border: `1px solid ${cores.cardBorda}`,
+                  background: cores.fundoInput,
+                  color: cores.branco,
+                  border: `1px solid ${cores.borda}`,
                   borderRadius: 4,
                   padding: 16,
                   fontSize: 12.5,

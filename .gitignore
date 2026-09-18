@@ -1,0 +1,6 @@
+venv/
+__pycache__/
+log/
+documentos_gerados/
+.env
+node_modules/

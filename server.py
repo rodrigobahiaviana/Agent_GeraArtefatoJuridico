@@ -56,6 +56,11 @@ LOG_DIR = PROJECT_DIR / "log"
 LOG_PATH = LOG_DIR / "registro.jsonl"
 LOG_DIR.mkdir(exist_ok=True)
 
+# Onde cada documento gerado é salvo como arquivo .md local, além de
+# devolvido na resposta HTTP
+DOCUMENTOS_DIR = PROJECT_DIR / "documentos_gerados"
+DOCUMENTOS_DIR.mkdir(exist_ok=True)
+
 # Campos comuns que podem conter CPF/CNPJ nos vários tipos de levantamento
 CAMPOS_IDENTIFICADOR = [
     "cpf", "cnpj",
@@ -96,6 +101,22 @@ def extrair_temas_juridicos(texto_documento: str) -> list[dict]:
     temas_brutos = re.findall(r"\[REVISAR:\s*([^\]]+)\]", texto_documento)
     temas_unicos = list(dict.fromkeys(t.strip() for t in temas_brutos if t.strip()))
     return [{"tema": tema, "link_busca_jusbrasil": link_busca_jusbrasil(tema)} for tema in temas_unicos]
+
+
+def salvar_documento_local(tipo_documento: str, identificador: str, texto_documento: str) -> str:
+    """Salva o documento gerado como arquivo .md em documentos_gerados/<tipo>/,
+    além de devolvido na resposta HTTP — para não depender só do
+    download manual pelo navegador. Retorna o caminho relativo ao
+    projeto."""
+    pasta_tipo = DOCUMENTOS_DIR / tipo_documento
+    pasta_tipo.mkdir(parents=True, exist_ok=True)
+
+    identificador_seguro = re.sub(r"[^\w.-]", "_", identificador).strip("_") or "sem-identificador"
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    caminho = pasta_tipo / f"{timestamp}_{identificador_seguro}.md"
+
+    caminho.write_text(texto_documento, encoding="utf-8")
+    return str(caminho.relative_to(PROJECT_DIR)).replace("\\", "/")
 
 
 def registrar_log(entrada: dict) -> None:
@@ -139,6 +160,9 @@ def renderizar_log_markdown(entradas: list[dict], identificador) -> str:
         linhas.append(f"## {e.get('timestamp', '')} — {e.get('tipo_documento', '')} ({status_label})")
         linhas.append(f"- Identificador: {e.get('identificador', 'não informado')}")
 
+        if e.get("arquivo"):
+            linhas.append(f"- Arquivo local: `{e['arquivo']}`")
+
         temas = e.get("temas_juridicos", [])
         if temas:
             linhas.append("- Temas jurídicos sinalizados (links de busca, não citações verificadas):")
@@ -163,6 +187,41 @@ def saude():
         "diretorio_skills_encontrado": (PROJECT_DIR / ".claude" / "skills").is_dir(),
         "diretorio_agents_encontrado": (PROJECT_DIR / ".claude" / "agents").is_dir(),
     }
+
+
+@app.get("/api/documentos")
+def listar_documentos():
+    """Lista os arquivos .md já salvos em documentos_gerados/ (todos os
+    tipos), mais recentes primeiro. Separado do /api/log: aqui é o
+    arquivo em si, não o registro de auditoria."""
+    documentos = []
+    if DOCUMENTOS_DIR.is_dir():
+        for caminho in DOCUMENTOS_DIR.rglob("*.md"):
+            stat = caminho.stat()
+            documentos.append({
+                "tipoDocumento": caminho.parent.name,
+                "nomeArquivo": caminho.name,
+                "caminho": str(caminho.relative_to(PROJECT_DIR)).replace("\\", "/"),
+                "tamanhoBytes": stat.st_size,
+                "modificadoEm": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+            })
+
+    documentos.sort(key=lambda d: d["modificadoEm"], reverse=True)
+    return {"total": len(documentos), "documentos": documentos}
+
+
+@app.get("/api/documentos/conteudo")
+def ler_documento(caminho: str):
+    """Devolve o conteúdo de um documento salvo, dado o `caminho`
+    relativo retornado por /api/documentos. Recusa qualquer caminho
+    que resolva para fora de documentos_gerados/."""
+    alvo = (PROJECT_DIR / caminho).resolve()
+    pasta_documentos = DOCUMENTOS_DIR.resolve()
+
+    if pasta_documentos not in alvo.parents or not alvo.is_file():
+        raise HTTPException(status_code=404, detail="Documento não encontrado.")
+
+    return {"caminho": caminho, "conteudo": alvo.read_text(encoding="utf-8")}
 
 
 @app.get("/api/log")
@@ -250,26 +309,31 @@ Ao final, responda em texto com o documento final completo seguido de
     relatorio = relatorio.strip()
 
     if "NECESSITA REVIS" in relatorio.upper() and "PRONTO PARA ENTREGA" not in relatorio.upper():
+        arquivo_local = salvar_documento_local(req.tipoDocumento, identificador, documento)
         registrar_log({
             "tipo_documento": req.tipoDocumento,
             "identificador": identificador,
             "status": "falha",
             "motivo_falha": "Revisão não aprovou o documento (NECESSITA REVISÃO).",
             "temas_juridicos": extrair_temas_juridicos(documento),
+            "arquivo": arquivo_local,
         })
         return {
             "status": "NECESSITA_REVISAO_HUMANA",
             "motivo": "A revisão automática não aprovou o documento.",
             "ultimaMinuta": documento,
             "relatorioRevisao": relatorio,
+            "arquivoLocal": arquivo_local,
         }
 
     temas_juridicos = extrair_temas_juridicos(documento)
+    arquivo_local = salvar_documento_local(req.tipoDocumento, identificador, documento)
     registrar_log({
         "tipo_documento": req.tipoDocumento,
         "identificador": identificador,
         "status": "sucesso",
         "temas_juridicos": temas_juridicos,
+        "arquivo": arquivo_local,
     })
 
     return {
@@ -277,6 +341,7 @@ Ao final, responda em texto com o documento final completo seguido de
         "documento": documento,
         "relatorioRevisao": relatorio,
         "temasJuridicos": temas_juridicos,
+        "arquivoLocal": arquivo_local,
     }
 
 

@@ -132,6 +132,167 @@ O endpoint `GET /api/log`:
 | `allowed_tools` | **`"Task"` precisa estar na lista** — é a ferramenta que o coordenador usa para acionar subagentes. Sem ela, a delegação nunca acontece |
 | `permission_mode` | `"acceptEdits"` é conveniente para desenvolvimento; em produção, avalie restringir por ferramenta |
 
+### 1.6 Front-end — como `GeradorDocumentosJuridicos.jsx` funciona por dentro
+
+O componente é um único arquivo React com estado local (`useState`),
+sem gerenciador de estado externo nem chamadas a bibliotecas de UI —
+só `papaparse` para CSV. `BACKEND_URL` é uma constante fixa
+(`http://localhost:3001`) no topo do arquivo; se o backend rodar em
+outro host/porta, é essa constante que precisa mudar.
+
+**Estado da seção "Gerar Documentos":**
+
+| Estado | Para que serve |
+|---|---|
+| `tipoDocumento` | tipo selecionado no `<select>`; some junto em cada request como `tipoDocumento` |
+| `registros` | array de objetos (um por linha do arquivo) já parseado — é o que vira `levantamento` em cada chamada ao backend |
+| `errosArquivo` | mensagens de validação; enquanto não vazio, o botão "Gerar" fica desabilitado |
+| `progresso` | `{ atual, total }`, atualizado a cada iteração do lote, alimenta a barra de progresso |
+| `resultados` | um item por registro processado, com o JSON de resposta do backend e um `ok` calculado no front |
+| `gerando` | trava o botão e troca o rótulo para "Gerando..." durante o lote |
+
+**Fluxo de upload e parsing (`handleArquivoSelecionado`):**
+
+1. Detecta a extensão do arquivo (`.csv` ou `.md`); qualquer outra é
+   rejeitada antes mesmo de ler o conteúdo.
+2. Lê o arquivo inteiro como texto com `FileReader.readAsText`.
+3. Para `.csv`, `parseCSV()` usa `Papa.parse(texto, { header: true, skipEmptyLines: true })`
+   — a primeira linha vira as chaves de cada objeto de registro.
+4. Para `.md`, `parseMarkdown()` faz `texto.split(/^##\s+/m)` — cada
+   bloco que sobra é um registro; dentro dele, cada linha é testada
+   contra `/^\s*[-*]?\s*([^:]+):\s*(.*)$/` para virar um par
+   `chave: valor`. Não há biblioteca de Markdown envolvida, é regex
+   simples.
+5. `validarRegistros()` só checa dois critérios: zero registros
+   encontrados, ou mais de `LIMITE_REGISTROS` (10) registros — não há
+   validação de quais colunas existem; isso fica inteiramente a cargo
+   do backend/skill.
+6. `gerarModeloCSV(tipoDocumento)` (usada pelos botões "Baixar
+   modelo") é a fonte de verdade dos nomes de coluna esperados por
+   tipo de documento — são esses nomes que a skill do backend espera
+   receber em `levantamento` (ver §1.6.1 abaixo e
+   `.claude/skills/gerador-documentos-juridicos/references/`).
+
+**Geração em lote (`handleGerarTodos`):** processa os registros **um
+de cada vez, sequencialmente** (não em paralelo) — cada iteração faz
+`await fetch(POST /api/gerar-documento)` com
+`{ tipoDocumento, levantamento: registros[i] }` e só avança para o
+próximo depois que o anterior responde. Isso é intencional (evita
+sobrecarregar o Agent SDK com múltiplas sessões simultâneas), mas
+também é por isso que um lote de 10 registros pode demorar minutos —
+cada registro passa pelo ciclo completo coordenador → redator →
+revisor → (loop de correção) → montador no backend antes do próximo
+começar. Uma falha de rede em um registro não interrompe os demais —
+é capturada e vira um resultado `ok: false` isolado.
+
+**Consulta ao log (`handleConsultarLog`):** `GET /api/log` (todos) ou
+`GET /api/log?identificador=<busca>` (parcial); o backend já devolve
+o campo `markdown` pronto para exibição, o componente só o renderiza
+como texto pré-formatado e oferece o download.
+
+#### 1.6.1 Contrato de campos por tipo de documento
+
+Estes são os nomes de campo que cada `levantamento` deve ter — vêm de
+`gerarModeloCSV()` no front-end e são exatamente os mesmos usados nos
+templates da skill:
+
+| Tipo | Campos |
+|---|---|
+| `confidencialidade` | `parte_a_nome`, `parte_a_documento`, `parte_b_nome`, `parte_b_documento`, `finalidade`, `prazo_anos` |
+| `locacao` | `locador_nome`, `locatario_nome`, `endereco_imovel`, `valor_aluguel`, `prazo_meses`, `modalidade_garantia` |
+| `trabalho` | `empregador_razao_social`, `empregado_nome`, `cargo`, `valor_salario`, `regime_trabalho` |
+| `prestacao-servicos-pj` | `contratante_razao_social`, `contratada_razao_social`, `descricao_servicos`, `valor_servicos`, `prazo_contrato` |
+
+**Gap conhecido:** `CAMPOS_IDENTIFICADOR` no backend (§1.7) procura
+chaves como `empregado_cpf`, `locador_documento` e
+`contratante_cnpj`, que não existem nesta lista — hoje só
+`confidencialidade` tem um campo (`parte_a_documento`/
+`parte_b_documento`) que o backend reconhece automaticamente como
+identificador. Para os outros três tipos, o log grava
+`identificador: "não informado"` até que o front-end passe a coletar
+CPF/CNPJ nesses formulários ou o backend seja ajustado para os nomes
+de campo reais.
+
+### 1.7 Back-end — como `server.py` funciona por dentro
+
+`server.py` é uma API FastAPI enxuta — sem banco de dados, sem
+autenticação, com CORS liberado para qualquer origem
+(`allow_origins=["*"]`, adequado só para desenvolvimento local).
+
+**Os três endpoints:**
+
+- **`GET /api/saude`** — não é só um "estou vivo": a cada chamada,
+  confere *ao vivo* se `.claude/skills/` e `.claude/agents/` existem
+  como diretórios dentro de `PROJECT_DIR` (a pasta de `server.py`) e
+  se `ANTHROPIC_API_KEY` está no ambiente do processo. Como a
+  variável de ambiente só é lida uma vez na inicialização do
+  processo, se você editar o `.env`/exportar a chave depois do
+  servidor já estar de pé, precisa reiniciar o processo para o health
+  check refletir isso.
+- **`GET /api/log`** — lê `log/registro.jsonl` linha a linha (uma
+  chamada a `/api/gerar-documento` = uma linha), filtra por
+  substring case-insensitive do `identificador` quando informado, e
+  monta tanto o JSON estruturado quanto uma versão em Markdown
+  (ordenada por timestamp decrescente) pronta para exibir ou baixar.
+- **`POST /api/gerar-documento`** — o único ponto onde o Agent SDK é
+  chamado. Passo a passo real do que acontece:
+  1. `extrair_identificador()` varre `CAMPOS_IDENTIFICADOR` (lista
+     fixa de nomes de campo comuns a CPF/CNPJ) no `levantamento` e
+     usa o primeiro que encontrar — só para fins de log, não afeta a
+     geração do documento em si.
+  2. Monta um único prompt de texto: tipo de documento +
+     `levantamento` serializado em JSON + instruções de fluxo
+     (delegar a `redator-clausulas` → `revisor-conformidade`
+     independente → loop de correção até `PRONTO PARA ENTREGA` →
+     `montador-documento`) + o formato exato de resposta esperado
+     (documento, depois `---RELATORIO_REVISAO---`, depois o
+     relatório). Essas instruções de fluxo **duplicam**, no prompt,
+     o que já está escrito em
+     `.claude/skills/gerador-documentos-juridicos/SKILL.md` — é
+     redundância proposital do código original, não algo que este
+     setup local mudou.
+  3. Chama `query(prompt, options=ClaudeAgentOptions(...))` **uma
+     única vez** (ver tabela §1.5) e itera o stream de mensagens
+     assíncronas até achar uma com atributo `.result` — esse é o
+     texto final da última mensagem do agente coordenador.
+  4. Faz `texto_final.split("---RELATORIO_REVISAO---", 1)` para
+     separar documento e relatório. Se o relatório contiver
+     `"NECESSITA REVIS"` sem também conter `"PRONTO PARA ENTREGA"`,
+     a resposta HTTP é `200 OK` mas com
+     `status: "NECESSITA_REVISAO_HUMANA"` — não é tratado como erro
+     HTTP, é um resultado válido que o front-end precisa checar
+     (`dados.status === "PRONTO"` é a condição de sucesso real usada
+     pelo front-end, não `resp.ok`).
+  5. Em caso de sucesso, `extrair_temas_juridicos()` roda uma regex
+     `\[REVISAR:\s*([^\]]+)\]` sobre o texto do documento, deduplica
+     os temas encontrados e monta um link de busca (nunca uma
+     citação) no Jusbrasil para cada um.
+  6. Toda chamada — sucesso, `NECESSITA_REVISAO_HUMANA` (contabilizado
+     como falha no log) ou exceção — grava uma linha em
+     `log/registro.jsonl` antes de responder.
+
+**Quem faz o quê dentro da chamada ao Agent SDK:** o agente principal
+(coordenador) que `query()` invoca lê
+`.claude/skills/gerador-documentos-juridicos/SKILL.md` (carregado
+automaticamente por `setting_sources=["project"]`) e, seguindo essas
+instruções, aciona três subagentes via `Task`, cada um definido em
+`.claude/agents/*.md` com seu próprio `tools:` restrito:
+
+| Subagente | Ferramentas | Função |
+|---|---|---|
+| `redator-clausulas` | `Read, Grep, Glob` | lê `references/<tipo>.md` (menu de cláusulas + base legal) e `assets/templates/<tipo>_template.md`, preenche as `{{variaveis}}` e devolve a minuta |
+| `revisor-conformidade` | `Read, Grep, Glob` | recebe só a minuta pronta + o tipo (nunca o raciocínio da redação), confere contra o checklist da referência e devolve `VEREDITO: PRONTO PARA ENTREGA` ou `NECESSITA REVISÃO` com motivos |
+| `montador-documento` | `Read` | formata a entrega final sem alterar conteúdo de cláusula, só depois do veredito aprovado |
+
+Os 4 arquivos de referência (`references/*.md`) são a única fonte de
+base legal aceita — cada um lista cláusulas obrigatórias/opcionais e
+os pontos que sempre precisam do marcador `[REVISAR: ...]`, citando
+artigos de lei reais e verificados (Código Civil, CLT, Lei 8.245/1991
+— Lei do Inquilinato). Nenhuma subagente tem autorização para citar
+lei, artigo ou jurisprudência que não esteja nesses arquivos — é essa
+restrição, e não um filtro de output, que impede a fabricação de
+citações jurídicas descrita em §1.4.
+
 ---
 
 ## 2. Instalação e execução
